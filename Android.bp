@@ -1,0 +1,140 @@
+/*
+ * Copyright (c) 2020 Arm Limited. All rights reserved.
+ *
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
+
+cc_defaults {
+    name: "cd_defaults",
+    cflags: [
+        "-Wextra",
+        "-Werror=mips-cheri-prototypes",
+        "-Werror=mips-cheri-prototypes-strict",
+        // Always keep the assert()s.
+        "-UNDEBUG",
+    ],
+
+    local_include_dirs: ["src"],
+    // We want to use cc_test to put the binaries in /data, but we don't want to use the gtest
+    // framework.
+    gtest: false,
+    // Use /data/nativetest64/compartment-demo as the base path for all executables.
+    relative_install_path: "compartment-demo",
+    // Disable automatic directory naming.
+    no_named_install_directory: true,
+}
+
+
+// Compartment manager / main executable.
+
+cc_test {
+    name: "compartment-demo",
+    defaults: ["cd_defaults"],
+    srcs: [
+        "src/compartment-manager/compartment_interface.cpp",
+        "src/compartment-manager/compartment_manager.cpp",
+        "src/compartment-manager/compartment_manager_asm.S",
+        "src/compartment-manager/main.cpp",
+        "src/utils/elf_util.cpp",
+    ],
+    static_libs: [
+        "libc++fs", // For std::filesystem
+    ],
+    required: [
+        "compartment_client_generate_keys",
+        "compartment_client_get_server_key",
+        "compartment_client_get_server_key_rogue",
+        "compartment_server",
+    ],
+}
+
+// Compartments.
+
+cc_defaults {
+    name: "cd_compartment_defaults",
+    defaults: ["cd_defaults"],
+    srcs: [
+        "src/compartments/compartment_globals.cpp",
+        "src/compartments/compartment_helpers.cpp",
+        "src/compartments/compartment_interface.cpp",
+        "src/compartments/compartment_mmap.cpp",
+    ],
+    static_executable: true,
+    // Symbols must be kept to allow the compartment manager to set special symbols inside
+    // the compartment.
+    strip: {
+        keep_symbols: true,
+    },
+    ldflags: [
+        // The compartment entry point is never referenced from within the compartment, and as a
+        // result would be removed when the linker GCs the input sections. To prevent that from
+        // happening, we create a dummy alias for the symbol, which marks the latter as used from
+        // lld's perspective.
+        // We proceed in the same way for the capability allowing to call into the compartment
+        // manager, as the compartment may not refer to it.
+        // There is unfortunately no way to do this directly in the code, so we have to hardcode
+        // the symbol names here.
+        "-Wl,--defsym=__keep__compartment_entry=__compartment_entry",
+        "-Wl,--defsym=__keep__compartment_manager_call=__compartment_manager_call",
+        // See compartment_mmap.cpp.
+        "-Wl,--wrap=mmap",
+        "-Wl,--wrap=munmap",
+        "-Wl,--wrap=brk",
+        "-Wl,--wrap=sbrk",
+    ],
+    // Install in a subdirectory of the compartment demo.
+    relative_install_path: "compartment-demo/compartments",
+}
+
+cc_defaults {
+    name: "compartment_client_defaults",
+    defaults: ["cd_compartment_defaults"],
+    srcs: [
+        "src/compartments/client.cpp",
+    ],
+    // Override the base address of the static binary, so that compartments do not overlap.
+    // The interval between compartments should be at least as big as kCompartmentMemoryRangeLength
+    // in ambient/main.cpp.
+    ldflags: [
+        "-Wl,--image-base=0x10000000",
+    ]
+}
+
+cc_test {
+    name: "compartment_client_generate_keys",
+    defaults: ["compartment_client_defaults"],
+    stem: "client_generate_keys",
+    cflags: [
+        "-DCOMPARTMENT_CLIENT_GENERATE_KEYS",
+    ],
+}
+
+cc_test {
+    name: "compartment_client_get_server_key",
+    defaults: ["compartment_client_defaults"],
+    stem: "client_get_server_key",
+    cflags: [
+        "-DCOMPARTMENT_CLIENT_GET_SERVER_KEY",
+    ],
+}
+
+cc_test {
+    name: "compartment_client_get_server_key_rogue",
+    defaults: ["compartment_client_defaults"],
+    stem: "client_get_server_key_rogue",
+    cflags: [
+        "-DCOMPARTMENT_CLIENT_GET_SERVER_KEY_ROGUE",
+    ],
+}
+
+cc_test {
+    name: "compartment_server",
+    defaults: ["cd_compartment_defaults"],
+    stem: "server",
+    srcs: [
+        "src/compartments/server.cpp",
+    ],
+    ldflags: [
+        "-Wl,--image-base=0x20000000",
+    ]
+}
